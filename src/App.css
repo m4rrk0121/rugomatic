@@ -57,8 +57,9 @@ body {
 }
 
 .container {
-  max-width: 1000px;
+  max-width: 1200px; /* Increased from 1000px */
   margin: 0 auto;
+  padding: 0 20px;
 }
 
 h1 {
@@ -83,7 +84,7 @@ h1 {
 }
 
 select, input[type="text"], input[type="password"], input[type="number"] {
-  padding: 8px;
+  padding: 10px;
   border: 1px solid #ccc;
   border-radius: 4px;
   font-size: 16px;
@@ -123,12 +124,12 @@ select {
   font-size: 24px;
   font-weight: bold;
   margin-bottom: 15px;
-  margin-top: 30px;
+  margin-top: 40px; /* Increased from 30px */
 }
 
 .recipients-subtitle {
   font-weight: bold;
-  margin-bottom: 15px;
+  margin-bottom: 25px; /* Increased from 15px */
 }
 
 .recipient-row {
@@ -247,18 +248,31 @@ select {
   display: flex;
   align-items: center;
   font-weight: bold;
-  margin-bottom: 10px;
-  padding: 8px 0;
+  margin-bottom: 15px; /* Increased from 10px */
+  padding: 10px 0; /* Increased from 8px 0 */
   border-bottom: 2px solid #ccc;
+}
+
+.multi-key-header + .multi-key-row {
+  margin-top: 20px;
 }
 
 .multi-key-row {
   display: flex;
   align-items: center;
-  margin-bottom: 15px;
-  padding: 10px;
+  margin-bottom: 20px; /* Increased from 15px */
+  padding: 15px; /* Increased from 10px */
   background-color: rgba(255, 255, 255, 0.6);
   border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.multi-key-row:nth-child(odd) {
+  background-color: rgba(255, 255, 255, 0.8);
+}
+
+.multi-key-row:nth-child(even) {
+  background-color: rgba(230, 240, 255, 0.6);
 }
 
 .multi-key-number {
@@ -268,7 +282,7 @@ select {
 }
 
 .multi-key-pk {
-  width: 18%;
+  width: 20%; /* Increased from 18% */
   padding: 0 5px;
 }
 
@@ -283,7 +297,7 @@ select {
 }
 
 .multi-key-dest {
-  width: 18%;
+  width: 20%; /* Increased from 18% */
   padding: 0 5px;
 }
 
@@ -293,7 +307,7 @@ select {
 }
 
 .multi-key-status {
-  width: 18%;
+  width: 14%; /* Decreased from 18% */
   padding: 0 5px;
 }
 
@@ -301,6 +315,7 @@ select {
   width: 100%;
   font-family: monospace;
   font-size: 14px;
+  padding: 10px;
 }
 
 .multi-key-source-display {
@@ -310,25 +325,29 @@ select {
   white-space: nowrap;
   font-family: monospace;
   font-size: 14px;
-  padding: 8px;
+  padding: 10px;
   background-color: #f1f1f1;
   border-radius: 4px;
+  border-left: 1px solid rgba(0,0,0,0.05);
+  border-right: 1px solid rgba(0,0,0,0.05);
 }
 
 .multi-key-balance-display {
   width: 100%;
-  padding: 8px;
+  padding: 10px;
   font-family: monospace;
   display: flex;
   align-items: center;
+  border-left: 1px solid rgba(0,0,0,0.05);
+  border-right: 1px solid rgba(0,0,0,0.05);
 }
 
 .tiny-button {
   background-color: #3b82f6;
   color: white;
   font-size: 10px;
-  width: 16px;
-  height: 16px;
+  width: 18px; /* Slightly bigger */
+  height: 18px; /* Slightly bigger */
   line-height: 1;
   border: none;
   border-radius: 50%;
@@ -343,21 +362,25 @@ select {
   width: 100%;
   font-family: monospace;
   font-size: 14px;
+  padding: 10px;
 }
 
 .multi-key-amount-input {
   width: 100%;
   font-family: monospace;
   font-size: 14px;
+  padding: 10px;
 }
 
 .multi-key-status-display {
   width: 100%;
-  padding: 8px;
+  padding: 10px;
   font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  border-left: 1px solid rgba(0,0,0,0.05);
+  border-right: 1px solid rgba(0,0,0,0.05);
 }
 
 .address-display {
@@ -368,8 +391,8 @@ select {
   color: #999;
   font-style: italic;
 }
-/* Add these styles to your existing App.css file */
 
+/* App header with logo */
 .app-header {
   display: flex;
   align-items: center;
@@ -383,11 +406,29 @@ select {
   margin-bottom: 15px;
 }
 
-/* Update the h1 style to be more prominent for the new name */
-h1 {
-  font-size: 36px;
+/* Load All Keys button styling */
+.multi-key-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 30px;
+}
+
+.load-all-button {
+  background-color: #3b82f6;
+  color: white;
+  padding: 10px 20px;
+  font-size: 16px;
   font-weight: bold;
-  margin-bottom: 20px;
-  color: #1e40af; /* Darker blue */
-  text-align: center;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.load-all-button:hover {
+  background-color: #2563eb;
+}
+
+.load-all-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

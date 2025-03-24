@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
-import rugLogo from './rug.png'; // Import the logo from your local path
+import rugLogo from './Rug.png'; // Make sure the case matches your actual file
 
 const EthereumTransferApp = () => {
   // State for the active tab (0 = single key, 1 = multiple keys)
@@ -29,6 +29,7 @@ const EthereumTransferApp = () => {
   const [error, setError] = useState('');
   const [transactionHashes, setTransactionHashes] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingKeys, setIsLoadingKeys] = useState(false);
   
   // Provider reference to avoid recreating it too often
   const providerRef = useRef(null);
@@ -45,20 +46,19 @@ const EthereumTransferApp = () => {
   // Initialize provider when network changes
   useEffect(() => {
     try {
+      console.log('Initializing provider for network:', network);
       providerRef.current = new ethers.providers.JsonRpcProvider(networks[network]);
       
       // If we have a wallet address in tab 1, update its balance
       if (walletAddress) {
+        console.log('Fetching balance for existing wallet:', walletAddress);
         fetchBalance(walletAddress);
       }
       
-      // Update balances for all wallets in tab 2 that have addresses
-      multiKeyTransfers.forEach((transfer, index) => {
-        if (transfer.sourceAddress) {
-          fetchMultiKeyBalance(index);
-        }
-      });
+      // We don't automatically update balances when network changes
+      // User must press "Load All Keys" button
     } catch (err) {
+      console.error('Provider initialization error:', err);
       setError('Failed to initialize provider: ' + err.message);
     }
   }, [network]);
@@ -73,11 +73,14 @@ const EthereumTransferApp = () => {
     if (!providerRef.current || !address) return;
 
     try {
+      console.log('Fetching balance for address:', address);
+      // Simplified balance request
       const balanceWei = await providerRef.current.getBalance(address, 'latest');
       const balanceEth = ethers.utils.formatEther(balanceWei);
+      console.log('Balance fetched:', balanceEth, 'ETH');
       setBalance(balanceEth);
     } catch (err) {
-      console.log('Failed to fetch balance:', err);
+      console.error('Failed to fetch balance:', err);
       setError(`Failed to fetch balance: ${err.message}`);
       setBalance('Error');
     }
@@ -89,14 +92,17 @@ const EthereumTransferApp = () => {
     if (!providerRef.current || !transfer.sourceAddress) return;
 
     try {
+      console.log('Fetching balance for multi-key wallet at index', index, ':', transfer.sourceAddress);
+      // Simplified balance request for multi-key
       const balanceWei = await providerRef.current.getBalance(transfer.sourceAddress, 'latest');
       const balanceEth = ethers.utils.formatEther(balanceWei);
+      console.log('Multi-key balance fetched:', balanceEth, 'ETH');
       
       const updatedTransfers = [...multiKeyTransfers];
       updatedTransfers[index] = { ...updatedTransfers[index], balance: balanceEth };
       setMultiKeyTransfers(updatedTransfers);
     } catch (err) {
-      console.log('Failed to fetch balance for wallet ' + index + ':', err);
+      console.error('Failed to fetch balance for wallet ' + index + ':', err);
       
       const updatedTransfers = [...multiKeyTransfers];
       updatedTransfers[index] = { ...updatedTransfers[index], balance: 'Error' };
@@ -108,24 +114,84 @@ const EthereumTransferApp = () => {
   const handleMultiKeyChange = (index, field, value) => {
     const updatedTransfers = [...multiKeyTransfers];
     updatedTransfers[index] = { ...updatedTransfers[index], [field]: value };
-    
-    // If private key changes, try to derive the address
-    if (field === 'privateKey' && value) {
-      try {
-        const wallet = new ethers.Wallet(value);
-        updatedTransfers[index].sourceAddress = wallet.address;
-        setMultiKeyTransfers(updatedTransfers);
-        
-        // Fetch balance for this address
-        setTimeout(() => fetchMultiKeyBalance(index), 100);
-      } catch {
-        // Invalid private key, just update the state without deriving address
-        updatedTransfers[index].sourceAddress = '';
-        setMultiKeyTransfers(updatedTransfers);
-      }
-    } else {
-      setMultiKeyTransfers(updatedTransfers);
+    setMultiKeyTransfers(updatedTransfers);
+  };
+
+  // Handle loading all keys in the multi-key tab
+  const handleLoadAllKeys = async () => {
+    if (!providerRef.current) {
+      setError('Provider is not initialized yet');
+      return;
     }
+
+    setIsLoadingKeys(true);
+    setError('');
+    console.log('Loading all private keys with valid format');
+
+    // Get all rows with private keys
+    const keysToLoad = multiKeyTransfers.filter(t => t.privateKey && t.privateKey.trim() !== '');
+    
+    if (keysToLoad.length === 0) {
+      setError('No private keys to load');
+      setIsLoadingKeys(false);
+      return;
+    }
+
+    const updatedTransfers = [...multiKeyTransfers];
+    
+    // Process each key one at a time
+    for (let i = 0; i < keysToLoad.length; i++) {
+      const index = multiKeyTransfers.indexOf(keysToLoad[i]);
+      const transfer = keysToLoad[i];
+      
+      try {
+        console.log(`Processing key ${i + 1}/${keysToLoad.length} at index ${index}`);
+        
+        // Derive address
+        const wallet = new ethers.Wallet(transfer.privateKey);
+        updatedTransfers[index] = { 
+          ...updatedTransfers[index], 
+          sourceAddress: wallet.address,
+          balance: 'Loading...'
+        };
+        setMultiKeyTransfers([...updatedTransfers]);
+        
+        // Fetch balance
+        try {
+          const balanceWei = await providerRef.current.getBalance(wallet.address, 'latest');
+          const balanceEth = ethers.utils.formatEther(balanceWei);
+          console.log('Balance fetched for wallet', index, ':', balanceEth, 'ETH');
+          
+          updatedTransfers[index] = { 
+            ...updatedTransfers[index],
+            balance: balanceEth
+          };
+          setMultiKeyTransfers([...updatedTransfers]);
+        } catch (balanceErr) {
+          console.error('Balance fetch error for wallet', index, ':', balanceErr);
+          updatedTransfers[index] = { 
+            ...updatedTransfers[index],
+            balance: 'Error'
+          };
+          setMultiKeyTransfers([...updatedTransfers]);
+        }
+        
+        // Slight delay to avoid rate limits
+        if (i < keysToLoad.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (err) {
+        console.error('Error processing private key at index', index, ':', err);
+        updatedTransfers[index] = { 
+          ...updatedTransfers[index],
+          sourceAddress: 'Invalid key',
+          balance: ''
+        };
+        setMultiKeyTransfers([...updatedTransfers]);
+      }
+    }
+    
+    setIsLoadingKeys(false);
   };
 
   // Handle recipient input changes for the single key tab
@@ -144,16 +210,19 @@ const EthereumTransferApp = () => {
 
     try {
       setError('');
+      console.log('Deriving address from private key');
       
       // Create wallet from private key
       const wallet = new ethers.Wallet(privateKey);
       setWalletAddress(wallet.address);
+      console.log('Address derived:', wallet.address);
 
       // Get balance if provider is available
       if (providerRef.current) {
         fetchBalance(wallet.address);
       }
     } catch (err) {
+      console.error('Error deriving address:', err);
       setError('Invalid private key format: ' + err.message);
       setWalletAddress('');
       setBalance('');
@@ -211,6 +280,7 @@ const EthereumTransferApp = () => {
 
     try {
       setIsLoading(true);
+      console.log('Starting single key batch transactions for', validRecipients.length, 'recipients');
       
       const wallet = new ethers.Wallet(privateKey);
       const connectedWallet = wallet.connect(providerRef.current);
@@ -222,12 +292,14 @@ const EthereumTransferApp = () => {
         const recipient = validRecipients[i];
         
         try {
+          console.log(`Processing transaction ${i + 1}/${validRecipients.length}`);
           const tx = {
             to: recipient.address,
             value: ethers.utils.parseEther(recipient.amount.toString())
           };
 
           try {
+            console.log('Estimating gas...');
             const gasEstimate = await providerRef.current.estimateGas({
               from: wallet.address,
               to: recipient.address,
@@ -235,22 +307,28 @@ const EthereumTransferApp = () => {
             });
             tx.gasLimit = gasEstimate;
             
+            console.log('Getting fee data...');
             const feeData = await providerRef.current.getFeeData();
             
             if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
               tx.maxFeePerGas = feeData.maxFeePerGas;
               tx.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas;
+              console.log('Using EIP-1559 fees');
             } else {
               tx.gasPrice = await providerRef.current.getGasPrice();
+              console.log('Using legacy gas price');
             }
           } catch (err) {
+            console.warn('Error estimating gas, using defaults:', err);
             tx.gasLimit = 21000;
             tx.gasPrice = await providerRef.current.getGasPrice();
           }
           
           setStatus(`Sending transaction ${i + 1}/${validRecipients.length} to ${recipient.address.substring(0, 6)}...${recipient.address.substring(38)}`);
           
+          console.log('Sending transaction...');
           const transaction = await connectedWallet.sendTransaction(tx);
+          console.log('Transaction sent, hash:', transaction.hash);
           
           hashes.push({
             to: recipient.address,
@@ -261,9 +339,11 @@ const EthereumTransferApp = () => {
           setTransactionHashes([...hashes]);
           setStatus(`Transaction ${i + 1}/${validRecipients.length} sent! Waiting for next transaction...`);
           
+          // Wait briefly between transactions
           await new Promise(resolve => setTimeout(resolve, 1000));
           
         } catch (err) {
+          console.error('Transaction failed:', err);
           hashes.push({
             to: recipient.address,
             amount: recipient.amount,
@@ -274,8 +354,11 @@ const EthereumTransferApp = () => {
       }
       
       setStatus(`Batch complete: ${hashes.filter(h => h.hash).length}/${validRecipients.length} transactions sent successfully`);
+      
+      // Refresh balance after transactions
       fetchBalance(wallet.address);
     } catch (err) {
+      console.error('Transaction processing failed:', err);
       setError(`Transaction processing failed: ${err.message}`);
     } finally {
       setIsLoading(false);
@@ -296,6 +379,7 @@ const EthereumTransferApp = () => {
 
     const validTransfers = multiKeyTransfers.filter(t => 
       t.privateKey && 
+      t.sourceAddress && 
       t.destinationAddress && 
       t.amount && 
       isValidAddress(t.destinationAddress) && 
@@ -309,6 +393,7 @@ const EthereumTransferApp = () => {
 
     try {
       setIsLoading(true);
+      console.log('Starting multi-key transactions for', validTransfers.length, 'wallets');
       
       const hashes = [];
       const newMultiKeyTransfers = [...multiKeyTransfers];
@@ -319,6 +404,7 @@ const EthereumTransferApp = () => {
         const transfer = validTransfers[i];
         
         try {
+          console.log(`Processing transaction ${i + 1}/${validTransfers.length} from wallet`);
           newMultiKeyTransfers[multiKeyTransfers.indexOf(transfer)].status = 'Processing...';
           setMultiKeyTransfers([...newMultiKeyTransfers]);
           
@@ -331,6 +417,7 @@ const EthereumTransferApp = () => {
           };
 
           try {
+            console.log('Estimating gas...');
             const gasEstimate = await providerRef.current.estimateGas({
               from: wallet.address,
               to: transfer.destinationAddress,
@@ -338,22 +425,28 @@ const EthereumTransferApp = () => {
             });
             tx.gasLimit = gasEstimate;
             
+            console.log('Getting fee data...');
             const feeData = await providerRef.current.getFeeData();
             
             if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
               tx.maxFeePerGas = feeData.maxFeePerGas;
               tx.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas;
+              console.log('Using EIP-1559 fees');
             } else {
               tx.gasPrice = await providerRef.current.getGasPrice();
+              console.log('Using legacy gas price');
             }
           } catch (err) {
+            console.warn('Error estimating gas, using defaults:', err);
             tx.gasLimit = 21000;
             tx.gasPrice = await providerRef.current.getGasPrice();
           }
           
           setStatus(`Sending transaction ${i + 1}/${validTransfers.length} from ${wallet.address.substring(0, 6)}...`);
           
+          console.log('Sending transaction...');
           const transaction = await connectedWallet.sendTransaction(tx);
+          console.log('Transaction sent, hash:', transaction.hash);
           
           hashes.push({
             from: wallet.address,
@@ -374,6 +467,7 @@ const EthereumTransferApp = () => {
           fetchMultiKeyBalance(multiKeyTransfers.indexOf(transfer));
           
         } catch (err) {
+          console.error('Transaction failed:', err);
           const errorMsg = err.message.length > 50 ? err.message.substring(0, 50) + '...' : err.message;
           newMultiKeyTransfers[multiKeyTransfers.indexOf(transfer)].status = 'Error: ' + errorMsg;
           setMultiKeyTransfers([...newMultiKeyTransfers]);
@@ -390,6 +484,7 @@ const EthereumTransferApp = () => {
       
       setStatus(`Multi-wallet batch complete: ${hashes.filter(h => h.hash).length}/${validTransfers.length} transactions sent successfully`);
     } catch (err) {
+      console.error('Transaction processing failed:', err);
       setError(`Transaction processing failed: ${err.message}`);
     } finally {
       setIsLoading(false);
@@ -399,12 +494,14 @@ const EthereumTransferApp = () => {
   // Function to manually retry balance fetch
   const retryFetchBalance = () => {
     if (walletAddress) {
+      console.log('Manually retrying balance fetch for address:', walletAddress);
       fetchBalance(walletAddress);
     }
   };
 
   // Function to manually retry balance fetch for multi-key tab
   const retryFetchMultiKeyBalance = (index) => {
+    console.log('Manually retrying balance fetch for multi-key wallet at index:', index);
     fetchMultiKeyBalance(index);
   };
 
@@ -560,6 +657,17 @@ const EthereumTransferApp = () => {
               Each row represents a separate transaction from a different wallet
             </div>
             
+            <div className="load-all-container">
+              <button
+                type="button"
+                onClick={handleLoadAllKeys}
+                disabled={isLoadingKeys || isLoading}
+                className="load-all-button"
+              >
+                {isLoadingKeys ? 'Loading Keys...' : 'Load All Keys'}
+              </button>
+            </div>
+            
             <div className="multi-key-header">
               <div className="multi-key-number">#</div>
               <div className="multi-key-pk">Private Key</div>
@@ -579,7 +687,7 @@ const EthereumTransferApp = () => {
                   onChange={(e) => handleMultiKeyChange(index, 'privateKey', e.target.value)}
                   placeholder="Private Key"
                   className="multi-key-pk-input"
-                  disabled={isLoading}
+                  disabled={isLoading || isLoadingKeys}
                 />
                 <div className="multi-key-source-display">
                   {transfer.sourceAddress ? (
@@ -601,7 +709,7 @@ const EthereumTransferApp = () => {
                   onChange={(e) => handleMultiKeyChange(index, 'destinationAddress', e.target.value)}
                   placeholder="Destination Address (0x...)"
                   className="multi-key-dest-input"
-                  disabled={isLoading}
+                  disabled={isLoading || isLoadingKeys}
                 />
                 <input
                   type="number"
@@ -611,7 +719,7 @@ const EthereumTransferApp = () => {
                   onChange={(e) => handleMultiKeyChange(index, 'amount', e.target.value)}
                   placeholder="ETH"
                   className="multi-key-amount-input"
-                  disabled={isLoading}
+                  disabled={isLoading || isLoadingKeys}
                 />
                 <div className="multi-key-status-display">
                   {transfer.status || '-'}
@@ -621,7 +729,7 @@ const EthereumTransferApp = () => {
 
             <button
               type="submit"
-              disabled={!isMultiKeyFormValid() || isLoading}
+              disabled={!isMultiKeyFormValid() || isLoading || isLoadingKeys}
               className="send-button"
             >
               {isLoading ? 'Processing Multi-Wallet Transfers...' : 'Send From Multiple Wallets'}
