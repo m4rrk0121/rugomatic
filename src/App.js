@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
-import rugLogo from './Rug.png'; // Make sure the case matches your actual file
+import rugLogo from './rug.png'; // Make sure the case matches your actual file
 
 const EthereumTransferApp = () => {
   // State for the active tab (0 = single key, 1 = multiple keys)
