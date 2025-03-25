@@ -63,6 +63,15 @@ const SWAP_ROUTER_ABI = [
   }
 ];
 
+// ERC20 Token ABI
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+  "function symbol() view returns (string)",
+  "function name() view returns (string)",
+  "function approve(address spender, uint256 amount) returns (bool)"
+];
+
 const EthereumTransferApp = () => {
   // State for the active tab (0 = single key, 1 = multiple keys, 2 = wallet generator, 3 = buy token)
   const [activeTab, setActiveTab] = useState(0);
@@ -96,11 +105,15 @@ const EthereumTransferApp = () => {
     address: '',
     balance: '',
     ethAmount: '',
+    tokenBalance: '0',
+    tokenDecimals: 18,
     status: ''
   })));
   const [isValidToken, setIsValidToken] = useState(false);
   const [tokenInfo, setTokenInfo] = useState({ name: '', symbol: '', decimals: 18 });
   const [isBuying, setIsBuying] = useState(false);
+  const [isSelling, setIsSelling] = useState(false);
+  const [isApproving, setIsApproving] = useState(false);
   const [currentBuyIndex, setCurrentBuyIndex] = useState(null);
   
   // Shared states
@@ -302,11 +315,7 @@ const EthereumTransferApp = () => {
       // Create token contract interface
       const tokenContract = new ethers.Contract(
         tokenAddress,
-        [
-          'function name() view returns (string)',
-          'function symbol() view returns (string)',
-          'function decimals() view returns (uint8)'
-        ],
+        ERC20_ABI,
         providerRef.current
       );
       
@@ -320,6 +329,11 @@ const EthereumTransferApp = () => {
       setTokenInfo({ name, symbol, decimals });
       setIsValidToken(true);
       setStatus(`Token validated: ${name} (${symbol})`);
+
+      // Update token balances for any loaded wallets
+      if (isValidToken && buyerWallets.some(w => w.address)) {
+        await updateAllTokenBalances();
+      }
     } catch (err) {
       console.error('Token validation error:', err);
       setError(`Failed to validate token: ${err.message}`);
@@ -327,28 +341,44 @@ const EthereumTransferApp = () => {
     }
   };
 
-  // Function to handle buyer wallet information changes
   const handleBuyerWalletChange = (index, field, value) => {
-    const updatedWallets = [...buyerWallets];
-    updatedWallets[index] = { ...updatedWallets[index], [field]: value };
+    console.log('Wallet change:', { index, field, value });
     
-    // If private key is changed, try to derive address
+    // Create a new array to avoid mutating state directly
+    const updatedWallets = buyerWallets.map((wallet, walletIndex) => {
+      // If this is the wallet we're updating, create a new object with updated field
+      if (walletIndex === index) {
+        return { 
+          ...wallet, 
+          [field]: value 
+        };
+      }
+      // Otherwise return the wallet unchanged
+      return wallet;
+    });
+  
+    // Update the entire wallets state
+    setBuyerWallets(updatedWallets);
+  
+    // If it's a private key, try to derive address
     if (field === 'privateKey' && value) {
       try {
-        const wallet = new ethers.Wallet(value);
-        updatedWallets[index].address = wallet.address;
+        const trimmedKey = value.trim();
+        const wallet = new ethers.Wallet(trimmedKey);
         
-        // Fetch balance if provider is available
-        if (providerRef.current) {
-          fetchBuyerWalletBalance(index, wallet.address, updatedWallets);
-        }
-      } catch {
-        updatedWallets[index].address = '';
-        updatedWallets[index].balance = '';
+        // Update the same wallet with derived address
+        const addressUpdatedWallets = updatedWallets.map((w, walletIndex) => 
+          walletIndex === index 
+            ? { ...w, address: wallet.address } 
+            : w
+        );
+  
+        // Update state again
+        setBuyerWallets(addressUpdatedWallets);
+      } catch (error) {
+        console.error('Error processing private key:', error);
       }
     }
-    
-    setBuyerWallets(updatedWallets);
   };
 
   // Function to fetch balance for a buyer wallet
@@ -381,52 +411,265 @@ const EthereumTransferApp = () => {
     }
   };
 
+  // Function to fetch token balance for a wallet
+  const fetchTokenBalance = async (index, walletAddress, tokenContractAddress) => {
+    if (!providerRef.current || !walletAddress || !tokenContractAddress) return;
+    
+    try {
+      const updatedWallets = [...buyerWallets];
+      updatedWallets[index].tokenBalance = 'Loading...';
+      setBuyerWallets(updatedWallets);
+      
+      const tokenContract = new ethers.Contract(
+        tokenContractAddress,
+        ERC20_ABI,
+        providerRef.current
+      );
+      
+      // Get token decimals first
+      let decimals = tokenInfo.decimals;
+      try {
+        decimals = await tokenContract.decimals();
+        updatedWallets[index].tokenDecimals = decimals;
+      } catch (err) {
+        console.error("Error getting token decimals, using default:", err);
+      }
+      
+      // Get token balance
+      const tokenBalanceWei = await tokenContract.balanceOf(walletAddress);
+      const tokenBalanceFormatted = ethers.utils.formatUnits(tokenBalanceWei, decimals);
+      
+      updatedWallets[index].tokenBalance = tokenBalanceFormatted;
+      setBuyerWallets(updatedWallets);
+      
+      return tokenBalanceFormatted;
+    } catch (err) {
+      console.error('Failed to fetch token balance:', err);
+      
+      const updatedWallets = [...buyerWallets];
+      updatedWallets[index].tokenBalance = 'Error';
+      setBuyerWallets(updatedWallets);
+      
+      return '0';
+    }
+  };
+
+  // Update token balances for all loaded wallets
+  const updateAllTokenBalances = async () => {
+    if (!isValidToken || !tokenAddress) return;
+    
+    const walletsWithAddresses = buyerWallets.filter(w => w.address && isValidAddress(w.address));
+    
+    for (let i = 0; i < walletsWithAddresses.length; i++) {
+      const index = buyerWallets.indexOf(walletsWithAddresses[i]);
+      await fetchTokenBalance(index, walletsWithAddresses[i].address, tokenAddress);
+      
+      // Small delay to avoid rate limits
+      if (i < walletsWithAddresses.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
+  };
+
   // Function to refresh a specific buyer wallet's balance
   const refreshBuyerWalletBalance = (index) => {
     const wallet = buyerWallets[index];
     if (wallet.address) {
       fetchBuyerWalletBalance(index, wallet.address);
-    }
-  };
-
-  // Function to load all buyer wallet private keys at once
-  const loadAllBuyerWallets = async () => {
-    const keysToLoad = buyerWallets.filter(w => w.privateKey && !w.address);
-    
-    if (keysToLoad.length === 0) {
-      return;
-    }
-    
-    const updatedWallets = [...buyerWallets];
-    
-    for (let i = 0; i < keysToLoad.length; i++) {
-      const index = buyerWallets.indexOf(keysToLoad[i]);
       
-      try {
-        const wallet = new ethers.Wallet(keysToLoad[i].privateKey);
-        updatedWallets[index].address = wallet.address;
-        setBuyerWallets([...updatedWallets]);
-        
-        // Fetch balance
-        await fetchBuyerWalletBalance(index, wallet.address, updatedWallets);
-        
-        // Small delay to avoid rate limits
-        if (i < keysToLoad.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 300));
-        }
-      } catch (err) {
-        updatedWallets[index].address = 'Invalid key';
-        updatedWallets[index].balance = '';
-        setBuyerWallets([...updatedWallets]);
+      // Also refresh token balance if token is validated
+      if (isValidToken && tokenAddress) {
+        fetchTokenBalance(index, wallet.address, tokenAddress);
       }
     }
   };
 
-  // Function to execute a buy transaction - UPDATED VERSION
+  const loadAllBuyerWallets = async () => {
+    console.log('Load All Keys button clicked');
+    
+    // Log the entire buyerWallets state for debugging
+    console.log('Full buyerWallets state:', JSON.stringify(buyerWallets, null, 2));
+  
+    // More robust filtering
+    const keysToLoad = buyerWallets.filter(w => {
+      const isValid = w.privateKey && w.privateKey.trim() !== '';
+      console.log('Detailed wallet check:', {
+        privateKey: w.privateKey,
+        trimmedKey: w.privateKey ? w.privateKey.trim() : null,
+        isValid: isValid
+      });
+      return isValid;
+    });
+    
+    console.log('Keys to load:', keysToLoad);
+  
+    if (keysToLoad.length === 0) {
+      console.error('No valid keys found in buyerWallets');
+      setError('No valid private keys to load');
+      return;
+    }
+  
+    if (!providerRef.current) {
+      console.error('Provider not initialized');
+      setError('Network provider is not ready');
+      return;
+    }
+  
+    setIsLoadingKeys(true);
+    setError('');
+  
+    const updatedWallets = [...buyerWallets];
+    
+    // Process each key one at a time
+    for (let i = 0; i < keysToLoad.length; i++) {
+      const wallet = keysToLoad[i];
+      const index = buyerWallets.indexOf(wallet);
+      
+      try {
+        console.log(`Processing key ${i + 1}/${keysToLoad.length} at index ${index}`);
+        
+        // Derive address
+        const derivedWallet = new ethers.Wallet(wallet.privateKey);
+        
+        // Update wallet with derived address
+        updatedWallets[index] = { 
+          ...updatedWallets[index], 
+          address: derivedWallet.address,
+          balance: 'Loading...'
+        };
+        
+        // Force update state
+        setBuyerWallets([...updatedWallets]);
+        
+        // Fetch balance
+        try {
+          console.log(`Fetching balance for address: ${derivedWallet.address}`);
+          
+          const balanceWei = await providerRef.current.getBalance(derivedWallet.address, 'latest');
+          const balanceEth = ethers.utils.formatEther(balanceWei);
+          
+          console.log(`Balance fetched for wallet ${index}:`, balanceEth, 'ETH');
+          
+          // Update balance
+          updatedWallets[index] = { 
+            ...updatedWallets[index],
+            balance: balanceEth
+          };
+          
+          // Force update state again
+          setBuyerWallets([...updatedWallets]);
+        } catch (balanceErr) {
+          console.error(`Balance fetch error for wallet ${index}:`, balanceErr);
+          
+          // Update with error state
+          updatedWallets[index] = { 
+            ...updatedWallets[index],
+            balance: 'Error'
+          };
+          
+          // Force update state
+          setBuyerWallets([...updatedWallets]);
+        }
+        
+        // Slight delay to avoid rate limits
+        if (i < keysToLoad.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (err) {
+        console.error(`Error processing private key at index ${index}:`, err);
+        
+        // Update with invalid key state
+        updatedWallets[index] = { 
+          ...updatedWallets[index],
+          address: 'Invalid key',
+          balance: ''
+        };
+        
+        // Force update state
+        setBuyerWallets([...updatedWallets]);
+      }
+    }
+    
+    // Finish loading
+    setIsLoadingKeys(false);
+    
+    console.log('Finished loading keys');
+  };
+
+  // Approve token for selling
+  const approveToken = async (index) => {
+    const wallet = buyerWallets[index];
+    
+    if (!isValidToken || !tokenAddress || !wallet.privateKey || !wallet.address) {
+      setError('Invalid wallet configuration or token');
+      return false;
+    }
+    
+    setCurrentBuyIndex(index);
+    setIsApproving(true);
+    
+    const updatedWallets = [...buyerWallets];
+    updatedWallets[index].status = 'Approving...';
+    setBuyerWallets(updatedWallets);
+    
+    try {
+      // Create wallet and connect to provider
+      const buyerWallet = new ethers.Wallet(wallet.privateKey);
+      const connectedWallet = buyerWallet.connect(providerRef.current);
+      
+      // Create token contract instance
+      const tokenContract = new ethers.Contract(
+        tokenAddress,
+        ERC20_ABI,
+        connectedWallet
+      );
+      
+      // Approve token spending (max amount)
+      const tx = await tokenContract.approve(
+        UNISWAP_V3_ROUTER_ADDRESS[network],
+        ethers.constants.MaxUint256
+      );
+      
+      updatedWallets[index].status = `Approval Pending: ${tx.hash.substring(0, 10)}...`;
+      setBuyerWallets([...updatedWallets]);
+      
+      // Wait for transaction confirmation
+      const receipt = await tx.wait();
+      
+      updatedWallets[index].status = 'Approved';
+      setBuyerWallets([...updatedWallets]);
+      
+      return true;
+    } catch (err) {
+      console.error('Token approval failed:', err);
+      
+      // More detailed error reporting
+      let errorMsg;
+      if (err.reason) {
+        errorMsg = `Approval Error: ${err.reason}`;
+      } else if (err.message) {
+        if (err.message.includes('user rejected')) {
+          errorMsg = 'Approval rejected by user';
+        } else {
+          errorMsg = err.message.length > 50 ? err.message.substring(0, 50) + '...' : err.message;
+        }
+      } else {
+        errorMsg = 'Unknown approval error';
+      }
+      
+      updatedWallets[index].status = `Error: ${errorMsg}`;
+      setBuyerWallets([...updatedWallets]);
+      return false;
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
+  // Function to execute a buy transaction
   const executeBuy = async (index) => {
     const wallet = buyerWallets[index];
     
-    if (!isValidToken || !wallet.privateKey || !wallet.address || !wallet.ethAmount) {
+    if (!isValidToken || !tokenAddress || !wallet.privateKey || !wallet.address || !wallet.ethAmount) {
       setError('Invalid wallet configuration or token');
       return;
     }
@@ -457,9 +700,6 @@ const EthereumTransferApp = () => {
         SWAP_ROUTER_ABI,
         connectedWallet
       );
-      
-      // Current timestamp + 20 minutes
-      const deadline = Math.floor(Date.now() / 1000) + 1200;
       
       // Prepare swap parameters
       const params = {
@@ -493,8 +733,9 @@ const EthereumTransferApp = () => {
       updatedWallets[index].status = `Success: ${tx.hash.substring(0, 10)}...`;
       setBuyerWallets([...updatedWallets]);
       
-      // Refresh balance
+      // Refresh balances
       fetchBuyerWalletBalance(index, wallet.address);
+      fetchTokenBalance(index, wallet.address, tokenAddress);
       
     } catch (err) {
       console.error('Buy transaction failed:', err);
@@ -521,6 +762,129 @@ const EthereumTransferApp = () => {
       setBuyerWallets([...updatedWallets]);
     } finally {
       setIsBuying(false);
+      setCurrentBuyIndex(null);
+    }
+  };
+
+  // Function to execute a sell transaction with percentage
+  const executeSell = async (index, percentage) => {
+    const wallet = buyerWallets[index];
+    
+    if (!isValidToken || !tokenAddress || !wallet.privateKey || !wallet.address) {
+      setError('Invalid wallet configuration or token');
+      return;
+    }
+    
+    // Make sure we have a token balance
+    if (wallet.tokenBalance === 'Loading...' || wallet.tokenBalance === 'Error' || parseFloat(wallet.tokenBalance) <= 0) {
+      setError('Invalid or zero token balance');
+      return;
+    }
+    
+    if (!UNISWAP_V3_ROUTER_ADDRESS[network]) {
+      setError(`Uniswap V3 router not available for ${network} network`);
+      return;
+    }
+    
+    setCurrentBuyIndex(index);
+    setIsSelling(true);
+    
+    const updatedWallets = [...buyerWallets];
+    updatedWallets[index].status = 'Approving...';
+    setBuyerWallets(updatedWallets);
+    
+    try {
+      // First approve the router to spend the tokens
+      const approved = await approveToken(index);
+      if (!approved) {
+        setIsSelling(false);
+        setCurrentBuyIndex(null);
+        return;
+      }
+      
+      updatedWallets[index].status = 'Processing sell...';
+      setBuyerWallets(updatedWallets);
+      
+      // Create wallet and connect to provider
+      const buyerWallet = new ethers.Wallet(wallet.privateKey);
+      const connectedWallet = buyerWallet.connect(providerRef.current);
+      
+      // Calculate amount based on percentage
+      const tokenBalance = parseFloat(wallet.tokenBalance);
+      const sellAmount = tokenBalance * (percentage / 100);
+      const sellAmountWei = ethers.utils.parseUnits(
+        sellAmount.toFixed(wallet.tokenDecimals), 
+        wallet.tokenDecimals
+      );
+      
+      // Create router contract interface with the full ABI
+      const router = new ethers.Contract(
+        UNISWAP_V3_ROUTER_ADDRESS[network],
+        SWAP_ROUTER_ABI,
+        connectedWallet
+      );
+      
+      // Prepare swap parameters for selling
+      const params = {
+        tokenIn: tokenAddress,
+        tokenOut: WETH_ADDRESS[network],
+        fee: 10000, // 1% fee tier
+        recipient: wallet.address,
+        amountIn: sellAmountWei,
+        amountOutMinimum: 0,
+        sqrtPriceLimitX96: 0
+      };
+      
+      console.log("Sell params:", params);
+      
+      // Execute swap
+      const tx = await router.exactInputSingle(
+        params,
+        {
+          gasLimit: 500000 // Increased gas limit for swaps
+        }
+      );
+      
+      updatedWallets[index].status = `Selling ${percentage}%: ${tx.hash.substring(0, 10)}...`;
+      setBuyerWallets([...updatedWallets]);
+      
+      // Wait for transaction confirmation
+      const receipt = await tx.wait();
+      
+      // Update status
+      updatedWallets[index].status = `Sold ${percentage}%: ${tx.hash.substring(0, 10)}...`;
+      setBuyerWallets([...updatedWallets]);
+      
+      // Refresh balances
+      fetchBuyerWalletBalance(index, wallet.address);
+      fetchTokenBalance(index, wallet.address, tokenAddress);
+      
+    } catch (err) {
+      console.error('Sell transaction failed:', err);
+      
+      // More detailed error reporting
+      let errorMsg;
+      if (err.reason) {
+        errorMsg = `Error: ${err.reason}`;
+      } else if (err.message) {
+        if (err.message.includes('insufficient funds')) {
+          errorMsg = 'Insufficient tokens to sell';
+        } else if (err.message.includes('user rejected')) {
+          errorMsg = 'Transaction rejected by user';
+        } else if (err.message.includes('execution reverted')) {
+          errorMsg = 'Sell reverted - liquidity or token restrictions';
+        } else {
+          errorMsg = err.message.length > 50 ? err.message.substring(0, 50) + '...' : err.message;
+        }
+      } else {
+        errorMsg = 'Unknown error';
+      }
+      
+      updatedWallets[index].status = `Error: ${errorMsg}`;
+      setBuyerWallets
+      ([...updatedWallets]);
+    } finally {
+      setIsSelling(false);
       setCurrentBuyIndex(null);
     }
   };
@@ -822,7 +1186,7 @@ const EthereumTransferApp = () => {
           const wallet = new ethers.Wallet(transfer.privateKey);
           const connectedWallet = wallet.connect(providerRef.current);
           
-          const tx ={
+          const tx = {
             to: transfer.destinationAddress,
             value: ethers.utils.parseEther(transfer.amount.toString())
           };
@@ -933,6 +1297,8 @@ const EthereumTransferApp = () => {
         address: '',
         balance: '',
         ethAmount: '',
+        tokenBalance: '0',
+        tokenDecimals: 18,
         status: ''
       })));
     };
@@ -1013,6 +1379,7 @@ const EthereumTransferApp = () => {
                 value={privateKey}
                 onChange={(e) => setPrivateKey(e.target.value)}
                 placeholder="Enter your private key"
+                autoComplete="off"
               />
               <button
                 onClick={handleDeriveAddress}
@@ -1125,6 +1492,7 @@ const EthereumTransferApp = () => {
                   placeholder="Private Key"
                   className="multi-key-pk-input"
                   disabled={isLoading || isLoadingKeys}
+                  autoComplete="off"
                 />
                 <div className="multi-key-source-display">
                   {transfer.sourceAddress ? (
@@ -1239,10 +1607,10 @@ const EthereumTransferApp = () => {
         </div>
       )}
 
-      {/* Tab 4: Buy Token - Fixed Formatted Version */}
+      {/* Tab 4: Buy Token - Fixed Formatted Version with Sell Buttons */}
       {activeTab === 3 && (
         <div className="buy-token-tab">
-          <h2 className="recipients-title">Buy Tokens with Multiple Wallets</h2>
+          <h2 className="recipients-title">Buy/Sell Tokens with Multiple Wallets</h2>
           
           {/* Token and Slippage Settings */}
           <div className="token-config-panel">
@@ -1304,11 +1672,11 @@ const EthereumTransferApp = () => {
           {/* Buyer Wallets Section */}
           <div className="buyer-wallets-section">
             <div className="section-header">
-              <h3>Buyer Wallets (up to 30)</h3>
+              <h3>Wallets (up to 30)</h3>
               <button
                 onClick={loadAllBuyerWallets}
                 className="load-all-button"
-                disabled={isBuying}
+                disabled={isBuying || isSelling}
               >
                 Load All Keys
               </button>
@@ -1318,10 +1686,11 @@ const EthereumTransferApp = () => {
               <div className="buyer-wallet-number">#</div>
               <div className="buyer-wallet-key">Private Key</div>
               <div className="buyer-wallet-address">Wallet Address</div>
-              <div className="buyer-wallet-balance">Balance</div>
+              <div className="buyer-wallet-balance">ETH Balance</div>
+              <div className="buyer-wallet-token-balance">Token Balance</div>
               <div className="buyer-wallet-amount">ETH to Swap</div>
-              <div className="buyer-wallet-status">Status</div>
               <div className="buyer-wallet-action">Action</div>
+              <div className="buyer-wallet-status">Status</div>
             </div>
             
             <div className="buyer-wallets-list">
@@ -1335,7 +1704,8 @@ const EthereumTransferApp = () => {
                       onChange={(e) => handleBuyerWalletChange(index, 'privateKey', e.target.value)}
                       placeholder="Private Key"
                       className="buyer-wallet-key-input"
-                      disabled={isBuying && currentBuyIndex === index}
+                      disabled={(isBuying || isSelling) && currentBuyIndex === index}
+                      autoComplete="off"
                     />
                   </div>
                   <div className="buyer-wallet-address">
@@ -1356,6 +1726,19 @@ const EthereumTransferApp = () => {
                       )}
                     </div>
                   </div>
+                  <div className="buyer-wallet-token-balance">
+                    <div className="buyer-wallet-balance-display">
+                      {isValidToken ? (
+                        wallet.tokenBalance === 'Loading...' ? 'Loading...' :
+                        wallet.tokenBalance === 'Error' ? 'Error' :
+                        parseFloat(wallet.tokenBalance) > 0 ? 
+                          <span>{parseFloat(wallet.tokenBalance).toFixed(6)} {tokenInfo.symbol}</span> : 
+                          <span>0 {tokenInfo.symbol}</span>
+                      ) : (
+                        '-'
+                      )}
+                    </div>
+                  </div>
                   <div className="buyer-wallet-amount">
                     <input
                       type="number"
@@ -1365,23 +1748,100 @@ const EthereumTransferApp = () => {
                       onChange={(e) => handleBuyerWalletChange(index, 'ethAmount', e.target.value)}
                       placeholder="ETH Amount"
                       className="buyer-wallet-amount-input"
-                      disabled={isBuying && currentBuyIndex === index}
+                      disabled={(isBuying || isSelling) && currentBuyIndex === index}
                     />
+                  </div>
+                  <div className="buyer-wallet-action">
+                    <div className="buyer-wallet-action-cell">
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        <button
+                          onClick={() => executeBuy(index)}
+                          disabled={!isValidToken || !wallet.privateKey || !wallet.address || !wallet.ethAmount || (isBuying && currentBuyIndex === index) || isSelling}
+                          className="buy-button"
+                          style={{ marginBottom: '5px' }}
+                        >
+                          {(isBuying && currentBuyIndex === index) ? 'Buying...' : 'Buy'}
+                        </button>
+                        
+                        {/* Sell buttons */}
+                        {isValidToken && wallet.tokenBalance && parseFloat(wallet.tokenBalance) > 0 && (
+                          <div className="sell-buttons-container" style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
+                            <button
+                              onClick={() => executeSell(index, 25)}
+                              disabled={(isBuying || isSelling || isApproving) && currentBuyIndex === index}
+                              className="sell-button"
+                              style={{ 
+                                flex: '1 0 40%', 
+                                padding: '3px', 
+                                fontSize: '12px',
+                                backgroundColor: '#f44336',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '3px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Sell 25%
+                            </button>
+                            <button
+                              onClick={() => executeSell(index, 50)}
+                              disabled={(isBuying || isSelling || isApproving) && currentBuyIndex === index}
+                              className="sell-button"
+                              style={{ 
+                                flex: '1 0 40%', 
+                                padding: '3px', 
+                                fontSize: '12px',
+                                backgroundColor: '#f44336',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '3px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Sell 50%
+                            </button>
+                            <button
+                              onClick={() => executeSell(index, 75)}
+                              disabled={(isBuying || isSelling || isApproving) && currentBuyIndex === index}
+                              className="sell-button"
+                              style={{ 
+                                flex: '1 0 40%', 
+                                padding: '3px', 
+                                fontSize: '12px',
+                                backgroundColor: '#f44336',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '3px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Sell 75%
+                            </button>
+                            <button
+                              onClick={() => executeSell(index, 100)}
+                              disabled={(isBuying || isSelling || isApproving) && currentBuyIndex === index}
+                              className="sell-button"
+                              style={{ 
+                                flex: '1 0 40%', 
+                                padding: '3px', 
+                                fontSize: '12px',
+                                backgroundColor: '#f44336',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '3px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Sell 100%
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
                   <div className="buyer-wallet-status">
                     <div className="buyer-wallet-status-display">
                       {wallet.status || '-'}
-                    </div>
-                  </div>
-                  <div className="buyer-wallet-action">
-                    <div className="buyer-wallet-action-cell">
-                      <button
-                        onClick={() => executeBuy(index)}
-                        disabled={!isValidToken || !wallet.privateKey || !wallet.address || !wallet.ethAmount || (isBuying && currentBuyIndex === index)}
-                        className="buy-button"
-                      >
-                        {(isBuying && currentBuyIndex === index) ? 'Buying...' : 'Buy'}
-                      </button>
                     </div>
                   </div>
                 </div>
