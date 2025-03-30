@@ -72,6 +72,14 @@ const ERC20_ABI = [
   "function approve(address spender, uint256 amount) returns (bool)"
 ];
 
+// WETH ABI for unwrapping WETH to ETH
+const WETH_ABI = [
+  "function withdraw(uint wad) external",
+  "function deposit() external payable",
+  "function balanceOf(address owner) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)"
+];
+
 const EthereumTransferApp = () => {
   // State for the active tab (0 = single key, 1 = multiple keys, 2 = wallet generator, 3 = buy token)
   const [activeTab, setActiveTab] = useState(0);
@@ -147,9 +155,7 @@ const EthereumTransferApp = () => {
     base: '0x4200000000000000000000000000000000000006', // WETH on Base
     mainnet: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', // WETH on Ethereum
     // Add other networks as needed
-  };
-
-  // Initialize provider when network changes
+  };// Initialize provider when network changes
   useEffect(() => {
     try {
       console.log('Initializing provider for network:', network);
@@ -298,9 +304,7 @@ const EthereumTransferApp = () => {
     }
     
     setIsLoadingKeys(false);
-  };
-
-  // Function to validate a token and get its information
+  };// Function to validate a token and get its information
   const validateToken = async () => {
     if (!tokenAddress || !isValidAddress(tokenAddress)) {
       setError('Please enter a valid token address');
@@ -326,9 +330,20 @@ const EthereumTransferApp = () => {
         tokenContract.decimals().catch(() => 18)
       ]);
       
-      setTokenInfo({ name, symbol, decimals });
+      // Truncate name and symbol to 15 characters
+      const truncatedName = name.length > 15 ? name.substring(0, 15) + '...' : name;
+      const truncatedSymbol = symbol.length > 15 ? symbol.substring(0, 15) + '...' : symbol;
+      
+      setTokenInfo({ 
+        name: truncatedName, 
+        symbol: truncatedSymbol, 
+        fullName: name,
+        fullSymbol: symbol,
+        decimals 
+      });
+      
       setIsValidToken(true);
-      setStatus(`Token validated: ${name} (${symbol})`);
+      setStatus(`Token validated: ${truncatedName} (${truncatedSymbol})`);
 
       // Update token balances for any loaded wallets
       if (isValidToken && buyerWallets.some(w => w.address)) {
@@ -469,9 +484,7 @@ const EthereumTransferApp = () => {
         await new Promise(resolve => setTimeout(resolve, 300));
       }
     }
-  };
-
-  // Function to refresh a specific buyer wallet's balance
+  };// Function to refresh a specific buyer wallet's balance
   const refreshBuyerWalletBalance = (index) => {
     const wallet = buyerWallets[index];
     if (wallet.address) {
@@ -596,7 +609,85 @@ const EthereumTransferApp = () => {
     console.log('Finished loading keys');
   };
 
-  // Approve token for selling
+  // Function to generate wallets
+  const generateWallets = async () => {
+    if (numWalletsToGenerate <= 0 || numWalletsToGenerate > 100) {
+      setError('Please enter a number between 1 and 100');
+      return;
+    }
+    
+    setIsGenerating(true);
+    setError('');
+    
+    // Generate wallets
+    try {
+      const wallets = [];
+      
+      for (let i = 0; i < numWalletsToGenerate; i++) {
+        // Create a new random wallet
+        const wallet = ethers.Wallet.createRandom();
+        wallets.push({
+          address: wallet.address,
+          privateKey: wallet.privateKey
+        });
+      }
+      
+      setGeneratedWallets(wallets);
+    } catch (err) {
+      console.error('Error generating wallets:', err);
+      setError('Failed to generate wallets: ' + err.message);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Function to download wallets as a text file
+  const downloadWallets = () => {
+    if (generatedWallets.length === 0) {
+      setError('No wallets to download');
+      return;
+    }
+    
+    // Create content
+    let content = 'Wallet Address,Private Key\n';
+    generatedWallets.forEach(wallet => {
+      content += `${wallet.address},${wallet.privateKey}\n`;
+    });
+    
+    // Create blob and download
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'generated_wallets.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Function to copy wallet data to clipboard
+  const copyToClipboard = () => {
+    if (generatedWallets.length === 0) {
+      setError('No wallets to copy');
+      return;
+    }
+    
+    // Create content
+    let content = 'Wallet Address,Private Key\n';
+    generatedWallets.forEach(wallet => {
+      content += `${wallet.address},${wallet.privateKey}\n`;
+    });
+    
+    navigator.clipboard.writeText(content)
+      .then(() => {
+        setStatus('Wallet data copied to clipboard!');
+        setTimeout(() => setStatus(''), 3000);
+      })
+      .catch(err => {
+        setError('Failed to copy to clipboard: ' + err.message);
+      });
+  };// Approve token for selling
   const approveToken = async (index) => {
     const wallet = buyerWallets[index];
     
@@ -764,9 +855,7 @@ const EthereumTransferApp = () => {
       setIsBuying(false);
       setCurrentBuyIndex(null);
     }
-  };
-
-  // Function to execute a sell transaction with percentage
+  };// Function to execute a sell transaction with percentage - MODIFIED to convert WETH to ETH
   const executeSell = async (index, percentage) => {
     const wallet = buyerWallets[index];
     
@@ -824,12 +913,12 @@ const EthereumTransferApp = () => {
         connectedWallet
       );
       
-      // Prepare swap parameters for selling
+      // Prepare swap parameters for selling tokens to WETH
       const params = {
         tokenIn: tokenAddress,
         tokenOut: WETH_ADDRESS[network],
         fee: 10000, // 1% fee tier
-        recipient: wallet.address,
+        recipient: wallet.address, // Send WETH back to the wallet
         amountIn: sellAmountWei,
         amountOutMinimum: 0,
         sqrtPriceLimitX96: 0
@@ -837,23 +926,56 @@ const EthereumTransferApp = () => {
       
       console.log("Sell params:", params);
       
-      // Execute swap
-      const tx = await router.exactInputSingle(
+      // Execute swap tokens to WETH
+      updatedWallets[index].status = `Swapping tokens to WETH...`;
+      setBuyerWallets([...updatedWallets]);
+      
+      const swapTx = await router.exactInputSingle(
         params,
         {
           gasLimit: 500000 // Increased gas limit for swaps
         }
       );
       
-      updatedWallets[index].status = `Selling ${percentage}%: ${tx.hash.substring(0, 10)}...`;
+      updatedWallets[index].status = `Swap pending: ${swapTx.hash.substring(0, 10)}...`;
       setBuyerWallets([...updatedWallets]);
       
       // Wait for transaction confirmation
-      const receipt = await tx.wait();
+      await swapTx.wait();
       
-      // Update status
-      updatedWallets[index].status = `Sold ${percentage}%: ${tx.hash.substring(0, 10)}...`;
+      // Now unwrap WETH to ETH
+      updatedWallets[index].status = `Converting WETH to ETH...`;
       setBuyerWallets([...updatedWallets]);
+      
+      // Create WETH contract interface
+      const wethContract = new ethers.Contract(
+        WETH_ADDRESS[network],
+        WETH_ABI,
+        connectedWallet
+      );
+      
+      // Check WETH balance
+      const wethBalance = await wethContract.balanceOf(wallet.address);
+      
+      if (wethBalance.gt(0)) {
+        // Withdraw all WETH to ETH
+        const withdrawTx = await wethContract.withdraw(wethBalance, {
+          gasLimit: 100000
+        });
+        
+        updatedWallets[index].status = `Unwrapping WETH: ${withdrawTx.hash.substring(0, 10)}...`;
+        setBuyerWallets([...updatedWallets]);
+        
+        // Wait for unwrap confirmation
+        await withdrawTx.wait();
+        
+        // Update final status
+        updatedWallets[index].status = `Sold ${percentage}% to ETH`;
+        setBuyerWallets([...updatedWallets]);
+      } else {
+        updatedWallets[index].status = `Swap completed, no WETH to convert`;
+        setBuyerWallets([...updatedWallets]);
+      }
       
       // Refresh balances
       fetchBuyerWalletBalance(index, wallet.address);
@@ -881,92 +1003,11 @@ const EthereumTransferApp = () => {
       }
       
       updatedWallets[index].status = `Error: ${errorMsg}`;
-      setBuyerWallets
-      ([...updatedWallets]);
+      setBuyerWallets([...updatedWallets]);
     } finally {
       setIsSelling(false);
       setCurrentBuyIndex(null);
     }
-  };
-
-  // Function to generate wallets
-  const generateWallets = async () => {
-    if (numWalletsToGenerate <= 0 || numWalletsToGenerate > 100) {
-      setError('Please enter a number between 1 and 100');
-      return;
-    }
-    
-    setIsGenerating(true);
-    setError('');
-    
-    // Generate wallets
-    try {
-      const wallets = [];
-      
-      for (let i = 0; i < numWalletsToGenerate; i++) {
-        // Create a new random wallet
-        const wallet = ethers.Wallet.createRandom();
-        wallets.push({
-          address: wallet.address,
-          privateKey: wallet.privateKey
-        });
-      }
-      
-      setGeneratedWallets(wallets);
-    } catch (err) {
-      console.error('Error generating wallets:', err);
-      setError('Failed to generate wallets: ' + err.message);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  // Function to download wallets as a text file
-  const downloadWallets = () => {
-    if (generatedWallets.length === 0) {
-      setError('No wallets to download');
-      return;
-    }
-    
-    // Create content
-    let content = 'Wallet Address,Private Key\n';
-    generatedWallets.forEach(wallet => {
-      content += `${wallet.address},${wallet.privateKey}\n`;
-    });
-    
-    // Create blob and download
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'generated_wallets.txt';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  // Function to copy wallet data to clipboard
-  const copyToClipboard = () => {
-    if (generatedWallets.length === 0) {
-      setError('No wallets to copy');
-      return;
-    }
-    
-    // Create content
-    let content = 'Wallet Address,Private Key\n';
-    generatedWallets.forEach(wallet => {
-      content += `${wallet.address},${wallet.privateKey}\n`;
-    });
-    
-    navigator.clipboard.writeText(content)
-      .then(() => {
-        setStatus('Wallet data copied to clipboard!');
-        setTimeout(() => setStatus(''), 3000);
-      })
-      .catch(err => {
-        setError('Failed to copy to clipboard: ' + err.message);
-      });
   };
 
   // Handle recipient input changes for the single key tab
@@ -1025,9 +1066,7 @@ const EthereumTransferApp = () => {
     );
     
     return hasValidTransfer && providerRef.current;
-  }, [multiKeyTransfers]);
-
-  // Handle single key transaction submission
+  }, [multiKeyTransfers]);// Handle single key transaction submission
   const handleSingleKeySubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -1264,15 +1303,10 @@ const EthereumTransferApp = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  };// Handle single key transaction submission
 
-  // Function to manually retry balance fetch
-  const retryFetchBalance = () => {
-    if (walletAddress) {
-      console.log('Manually retrying balance fetch for address:', walletAddress);
-      fetchBalance(walletAddress);
-    }
-  };
+
+
 
   // Function to manually retry balance fetch for multi-key tab
   const retryFetchMultiKeyBalance = (index) => {
@@ -1365,9 +1399,7 @@ const EthereumTransferApp = () => {
             </div>
           )}
         </div>
-      )}
-      
-      {/* Tab 1: Single Private Key to Multiple Recipients */}
+      )}{/* Tab 1: Single Private Key to Multiple Recipients */}
       {activeTab === 0 && (
         <>
           <div className="form-group">
@@ -1391,23 +1423,23 @@ const EthereumTransferApp = () => {
           </div>
 
           {walletAddress && (
-            <div className="wallet-info">
-              <p>
-                <strong>Wallet Address:</strong> {walletAddress}
-              </p>
-              <div style={{ display: 'flex', alignItems: 'center' }}>
-                <p>
-                  <strong>Balance:</strong> {balance ? `${balance} ETH` : 'Loading...'}
-                </p>
-                <button 
-                  onClick={retryFetchBalance}
-                  className="retry-button"
-                >
-                  Retry
-                </button>
-              </div>
-            </div>
-          )}
+  <div className="wallet-info">
+    <p>
+      <strong>Wallet Address:</strong> {walletAddress}
+    </p>
+    <div style={{ display: 'flex', alignItems: 'center' }}>
+      <p>
+        <strong>Balance:</strong> {balance ? `${parseFloat(balance).toFixed(4)} ETH` : 'Loading...'}
+      </p>
+      <button 
+        onClick={fetchBalance}
+        className="retry-button"
+      >
+        Retry
+      </button>
+    </div>
+  </div>
+)}
 
           <form onSubmit={handleSingleKeySubmit}>
             <h2 className="recipients-title">Recipients (up to 30)</h2>
@@ -1502,12 +1534,12 @@ const EthereumTransferApp = () => {
                   )}
                 </div>
                 <div className="multi-key-balance-display">
-                  {transfer.balance ? (
-                    <span>{transfer.balance} ETH <button onClick={() => retryFetchMultiKeyBalance(index)} className="tiny-button">↻</button></span>
-                  ) : (
-                    transfer.sourceAddress ? 'Loading...' : '-'
-                  )}
-                </div>
+  {transfer.balance ? (
+    <span>{parseFloat(transfer.balance).toFixed(4)} ETH <button onClick={() => retryFetchMultiKeyBalance(index)} className="tiny-button">↻</button></span>
+  ) : (
+    transfer.sourceAddress ? 'Loading...' : '-'
+  )}
+</div>
                 <input
                   type="text"
                   value={transfer.destinationAddress}
@@ -1541,9 +1573,7 @@ const EthereumTransferApp = () => {
             </button>
           </form>
         </>
-      )}
-
-      {/* Tab 3: Wallet Generator */}
+      )}{/* Tab 3: Wallet Generator */}
       {activeTab === 2 && (
         <div className="wallet-generator-tab">
           <h2 className="recipients-title">Generate New Wallets</h2>
@@ -1655,11 +1685,11 @@ const EthereumTransferApp = () => {
               <div className="token-info-panel">
                 <div className="token-info-item">
                   <span className="token-info-label">Name:</span>
-                  <span className="token-info-value">{tokenInfo.name}</span>
+                  <span className="token-info-value" title={tokenInfo.fullName || tokenInfo.name}>{tokenInfo.name}</span>
                 </div>
                 <div className="token-info-item">
                   <span className="token-info-label">Symbol:</span>
-                  <span className="token-info-value">{tokenInfo.symbol}</span>
+                  <span className="token-info-value" title={tokenInfo.fullSymbol || tokenInfo.symbol}>{tokenInfo.symbol}</span>
                 </div>
                 <div className="token-info-item">
                   <span className="token-info-label">Decimals:</span>
@@ -1718,13 +1748,13 @@ const EthereumTransferApp = () => {
                     </div>
                   </div>
                   <div className="buyer-wallet-balance">
-                    <div className="buyer-wallet-balance-display">
-                      {wallet.balance ? (
-                        <span>{wallet.balance} ETH <button onClick={() => refreshBuyerWalletBalance(index)} className="tiny-button">↻</button></span>
-                      ) : (
-                        wallet.address ? 'Loading...' : '-'
-                      )}
-                    </div>
+                  <div className="buyer-wallet-balance-display">
+  {wallet.balance ? (
+    <span>{parseFloat(wallet.balance).toFixed(4)} ETH <button onClick={() => refreshBuyerWalletBalance(index)} className="tiny-button">↻</button></span>
+  ) : (
+    wallet.address ? 'Loading...' : '-'
+  )}
+</div>
                   </div>
                   <div className="buyer-wallet-token-balance">
                     <div className="buyer-wallet-balance-display">
@@ -1849,9 +1879,7 @@ const EthereumTransferApp = () => {
             </div>
           </div>
         </div>
-      )}
-
-      {/* Common Status and Error Messages */}
+      )}{/* Common Status and Error Messages */}
       {error && (
         <div className="error-message">
           {error}
