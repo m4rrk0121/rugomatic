@@ -947,3 +947,33 @@ select {
     display: none;
   }
 }
+/* Add this to your EthDistributor.css file */
+.export-balances-button {
+  background-color: #10b981; /* Green color */
+  color: white;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 6px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+
+.export-balances-button:hover {
+  background-color: #059669; /* Darker green on hover */
+}
+
+.export-balances-button:disabled {
+  background-color: #a0aec0;
+  cursor: not-allowed;
+}
+
+/* Update the wallet-actions class to better handle multiple buttons */
+.wallet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
+  margin-bottom: 20px;
+  align-items: center;
+}

@@ -108,7 +108,7 @@ const EthereumTransferApp = () => {
   // Buy token tab states
   const [tokenAddress, setTokenAddress] = useState('');
   const [slippage, setSlippage] = useState(0.5); // Default 0.5%
-  const [buyerWallets, setBuyerWallets] = useState(Array(30).fill().map(() => ({
+  const [buyerWallets, setBuyerWallets] = useState(Array(91).fill().map(() => ({
     privateKey: '',
     address: '',
     balance: '',
@@ -1306,7 +1306,104 @@ const EthereumTransferApp = () => {
   };// Handle single key transaction submission
 
 
+// Function to parse the wallet text file and extract private keys
+const parseWalletFile = (fileContent) => {
+  // Regular expression to match private keys in the format "Private Key: 0x..."
+  const privateKeyRegex = /Private Key: (0x[a-fA-F0-9]{64})/g;
+  
+  // Array to store all found private keys
+  const privateKeys = [];
+  
+  // Find all matches in the file content
+  let match;
+  while ((match = privateKeyRegex.exec(fileContent)) !== null) {
+    privateKeys.push(match[1]);
+  }
+  
+  return privateKeys;
+};
 
+// Function to import the keys to the buyer wallets
+const importKeysToWallets = (privateKeys) => {
+  // Get the current state of buyer wallets
+  const currentWallets = [...buyerWallets];
+  
+  // Fill as many wallets as we have keys for
+  const keysToImport = Math.min(privateKeys.length, currentWallets.length);
+  
+  console.log(`Importing ${keysToImport} keys to buyer wallets`);
+  
+  // Update the wallets with the private keys
+  for (let i = 0; i < keysToImport; i++) {
+    currentWallets[i] = {
+      ...currentWallets[i],
+      privateKey: privateKeys[i]
+    };
+  }
+  
+  // Update the state
+  setBuyerWallets(currentWallets);
+  
+  // Return the number of keys imported
+  return keysToImport;
+};
+
+// Main function to handle importing keys from file
+const importKeysFromFile = (fileContent) => {
+  try {
+    // Parse the file to extract private keys
+    const privateKeys = parseWalletFile(fileContent);
+    
+    if (privateKeys.length === 0) {
+      setError('No private keys found in the file');
+      return;
+    }
+    
+    // Import the keys to the buyer wallets
+    const importedCount = importKeysToWallets(privateKeys);
+    
+    setStatus(`Successfully imported ${importedCount} private keys`);
+    
+    // If we have a token address set and validated, we might want to load the wallets
+    if (isValidToken && tokenAddress) {
+      // Optional: Auto-load the wallets after import
+      loadAllBuyerWallets();
+    }
+    
+  } catch (err) {
+    console.error('Error importing keys from file:', err);
+    setError(`Failed to import keys: ${err.message}`);
+  }
+};
+const processImportFile = () => {
+  if (!importFile) {
+    setError('Please select a file to import');
+    return;
+  }
+  
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const fileContent = e.target.result;
+    importKeysFromFile(fileContent);
+  };
+  
+  reader.onerror = (e) => {
+    console.error('File read error:', e);
+    setError('Failed to read the import file');
+  };
+  
+  reader.readAsText(importFile);
+};
+// Add this state to track file input
+const [importFile, setImportFile] = useState(null);
+
+// Add this function to the component
+const handleFileUpload = (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  setImportFile(file);
+};
 
   // Function to manually retry balance fetch for multi-key tab
   const retryFetchMultiKeyBalance = (index) => {
@@ -1326,7 +1423,7 @@ const EthereumTransferApp = () => {
         balance: '',
         status: '' 
       })));
-      setBuyerWallets(Array(30).fill().map(() => ({
+      setBuyerWallets(Array(91).fill().map(() => ({
         privateKey: '',
         address: '',
         balance: '',
@@ -1399,7 +1496,9 @@ const EthereumTransferApp = () => {
             </div>
           )}
         </div>
-      )}{/* Tab 1: Single Private Key to Multiple Recipients */}
+      )}
+
+      {/* Tab 1: Single Private Key to Multiple Recipients */}
       {activeTab === 0 && (
         <>
           <div className="form-group">
@@ -1423,23 +1522,23 @@ const EthereumTransferApp = () => {
           </div>
 
           {walletAddress && (
-  <div className="wallet-info">
-    <p>
-      <strong>Wallet Address:</strong> {walletAddress}
-    </p>
-    <div style={{ display: 'flex', alignItems: 'center' }}>
-      <p>
-        <strong>Balance:</strong> {balance ? `${parseFloat(balance).toFixed(4)} ETH` : 'Loading...'}
-      </p>
-      <button 
-        onClick={fetchBalance}
-        className="retry-button"
-      >
-        Retry
-      </button>
-    </div>
-  </div>
-)}
+            <div className="wallet-info">
+              <p>
+                <strong>Wallet Address:</strong> {walletAddress}
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                <p>
+                  <strong>Balance:</strong> {balance ? `${parseFloat(balance).toFixed(4)} ETH` : 'Loading...'}
+                </p>
+                <button 
+                  onClick={() => fetchBalance(walletAddress)}
+                  className="retry-button"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
 
           <form onSubmit={handleSingleKeySubmit}>
             <h2 className="recipients-title">Recipients (up to 30)</h2>
@@ -1534,12 +1633,12 @@ const EthereumTransferApp = () => {
                   )}
                 </div>
                 <div className="multi-key-balance-display">
-  {transfer.balance ? (
-    <span>{parseFloat(transfer.balance).toFixed(4)} ETH <button onClick={() => retryFetchMultiKeyBalance(index)} className="tiny-button">↻</button></span>
-  ) : (
-    transfer.sourceAddress ? 'Loading...' : '-'
-  )}
-</div>
+                  {transfer.balance ? (
+                    <span>{parseFloat(transfer.balance).toFixed(4)} ETH <button onClick={() => retryFetchMultiKeyBalance(index)} className="tiny-button">↻</button></span>
+                  ) : (
+                    transfer.sourceAddress ? 'Loading...' : '-'
+                  )}
+                </div>
                 <input
                   type="text"
                   value={transfer.destinationAddress}
@@ -1573,7 +1672,9 @@ const EthereumTransferApp = () => {
             </button>
           </form>
         </>
-      )}{/* Tab 3: Wallet Generator */}
+      )}
+
+      {/* Tab 3: Wallet Generator */}
       {activeTab === 2 && (
         <div className="wallet-generator-tab">
           <h2 className="recipients-title">Generate New Wallets</h2>
@@ -1637,7 +1738,7 @@ const EthereumTransferApp = () => {
         </div>
       )}
 
-      {/* Tab 4: Buy Token - Fixed Formatted Version with Sell Buttons */}
+      {/* Tab 4: Buy Token - With Key Import Feature */}
       {activeTab === 3 && (
         <div className="buy-token-tab">
           <h2 className="recipients-title">Buy/Sell Tokens with Multiple Wallets</h2>
@@ -1699,10 +1800,40 @@ const EthereumTransferApp = () => {
             )}
           </div>
           
-          {/* Buyer Wallets Section */}
+          {/* Buyer Wallets Section with Key Import Feature */}
           <div className="buyer-wallets-section">
+            {/* New Key Import Feature */}
+            <div className="import-controls" style={{ 
+              marginBottom: '15px', 
+              display: 'flex', 
+              alignItems: 'center',
+              gap: '10px'
+            }}>
+              <input
+                type="file"
+                onChange={handleFileUpload}
+                accept=".txt"
+                id="keyImport"
+                style={{ flex: '1' }}
+              />
+              <button
+                onClick={processImportFile}
+                disabled={!importFile}
+                style={{
+                  padding: '8px 16px',
+                  backgroundColor: '#4CAF50',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                Import Keys
+              </button>
+            </div>
+            
             <div className="section-header">
-              <h3>Wallets (up to 30)</h3>
+              <h3>Wallets (up to 60)</h3>
               <button
                 onClick={loadAllBuyerWallets}
                 className="load-all-button"
@@ -1748,13 +1879,13 @@ const EthereumTransferApp = () => {
                     </div>
                   </div>
                   <div className="buyer-wallet-balance">
-                  <div className="buyer-wallet-balance-display">
-  {wallet.balance ? (
-    <span>{parseFloat(wallet.balance).toFixed(4)} ETH <button onClick={() => refreshBuyerWalletBalance(index)} className="tiny-button">↻</button></span>
-  ) : (
-    wallet.address ? 'Loading...' : '-'
-  )}
-</div>
+                    <div className="buyer-wallet-balance-display">
+                      {wallet.balance ? (
+                        <span>{parseFloat(wallet.balance).toFixed(4)} ETH <button onClick={() => refreshBuyerWalletBalance(index)} className="tiny-button">↻</button></span>
+                      ) : (
+                        wallet.address ? 'Loading...' : '-'
+                      )}
+                    </div>
                   </div>
                   <div className="buyer-wallet-token-balance">
                     <div className="buyer-wallet-balance-display">
@@ -1831,7 +1962,7 @@ const EthereumTransferApp = () => {
                               Sell 50%
                             </button>
                             <button
-                              onClick={() => executeSell(index, 75)}
+                              onClick={() => executeSell(index, 99)}
                               disabled={(isBuying || isSelling || isApproving) && currentBuyIndex === index}
                               className="sell-button"
                               style={{ 
@@ -1845,7 +1976,7 @@ const EthereumTransferApp = () => {
                                 cursor: 'pointer'
                               }}
                             >
-                              Sell 75%
+                              Sell 99%
                             </button>
                             <button
                               onClick={() => executeSell(index, 100)}
@@ -1879,7 +2010,9 @@ const EthereumTransferApp = () => {
             </div>
           </div>
         </div>
-      )}{/* Common Status and Error Messages */}
+      )}
+
+      {/* Common Status and Error Messages */}
       {error && (
         <div className="error-message">
           {error}
