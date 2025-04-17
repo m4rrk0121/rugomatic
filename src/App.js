@@ -304,7 +304,80 @@ const EthereumTransferApp = () => {
     }
     
     setIsLoadingKeys(false);
-  };// Function to validate a token and get its information
+  };
+
+  // Function to fetch token balance for a wallet
+  const fetchTokenBalance = async (index, walletAddress, tokenContractAddress) => {
+    if (!providerRef.current || !walletAddress || !tokenContractAddress) return;
+    
+    try {
+      const updatedWallets = [...buyerWallets];
+      updatedWallets[index].tokenBalance = 'Loading...';
+      setBuyerWallets(updatedWallets);
+      
+      const tokenContract = new ethers.Contract(
+        tokenContractAddress,
+        ERC20_ABI,
+        providerRef.current
+      );
+      
+      // Get token decimals first
+      let decimals = tokenInfo.decimals;
+      try {
+        decimals = await tokenContract.decimals();
+        updatedWallets[index].tokenDecimals = decimals;
+      } catch (err) {
+        console.error("Error getting token decimals, using default:", err);
+      }
+      
+      // Get token balance
+      const tokenBalanceWei = await tokenContract.balanceOf(walletAddress);
+      const tokenBalanceFormatted = ethers.utils.formatUnits(tokenBalanceWei, decimals);
+      
+      // Convert to number and back to string to handle zero balances properly
+      const formattedBalance = parseFloat(tokenBalanceFormatted).toString();
+      updatedWallets[index].tokenBalance = formattedBalance;
+      setBuyerWallets(updatedWallets);
+      
+      return formattedBalance;
+    } catch (err) {
+      console.error('Failed to fetch token balance:', err);
+      
+      const updatedWallets = [...buyerWallets];
+      updatedWallets[index].tokenBalance = '0';  // Set to '0' instead of 'Error' for failed fetches
+      setBuyerWallets(updatedWallets);
+      
+      return '0';
+    }
+  };
+
+  // Update token balances for all loaded wallets
+  const updateAllTokenBalances = async () => {
+    if (!isValidToken || !tokenAddress) return;
+    
+    const walletsWithAddresses = buyerWallets.filter(w => w.address && isValidAddress(w.address));
+    
+    // Process wallets in batches of 5 to avoid rate limits
+    const batchSize = 5;
+    for (let i = 0; i < walletsWithAddresses.length; i += batchSize) {
+      const batch = walletsWithAddresses.slice(i, i + batchSize);
+      const promises = batch.map(wallet => {
+        const index = buyerWallets.indexOf(wallet);
+        return Promise.all([
+          fetchBuyerWalletBalance(index, wallet.address),
+          fetchTokenBalance(index, wallet.address, tokenAddress)
+        ]);
+      });
+      
+      await Promise.all(promises);
+      
+      // Small delay between batches to avoid rate limits
+      if (i + batchSize < walletsWithAddresses.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+  };
+
   const validateToken = async () => {
     if (!tokenAddress || !isValidAddress(tokenAddress)) {
       setError('Please enter a valid token address');
@@ -345,8 +418,8 @@ const EthereumTransferApp = () => {
       setIsValidToken(true);
       setStatus(`Token validated: ${truncatedName} (${truncatedSymbol})`);
 
-      // Update token balances for any loaded wallets
-      if (isValidToken && buyerWallets.some(w => w.address)) {
+      // Immediately update balances for any loaded wallets
+      if (buyerWallets.some(w => w.address)) {
         await updateAllTokenBalances();
       }
     } catch (err) {
@@ -423,336 +496,6 @@ const EthereumTransferApp = () => {
       if (!walletsArray) {
         setBuyerWallets([...wallets]);
       }
-    }
-  };
-
-  // Function to fetch token balance for a wallet
-  const fetchTokenBalance = async (index, walletAddress, tokenContractAddress) => {
-    if (!providerRef.current || !walletAddress || !tokenContractAddress) return;
-    
-    try {
-      const updatedWallets = [...buyerWallets];
-      updatedWallets[index].tokenBalance = 'Loading...';
-      setBuyerWallets(updatedWallets);
-      
-      const tokenContract = new ethers.Contract(
-        tokenContractAddress,
-        ERC20_ABI,
-        providerRef.current
-      );
-      
-      // Get token decimals first
-      let decimals = tokenInfo.decimals;
-      try {
-        decimals = await tokenContract.decimals();
-        updatedWallets[index].tokenDecimals = decimals;
-      } catch (err) {
-        console.error("Error getting token decimals, using default:", err);
-      }
-      
-      // Get token balance
-      const tokenBalanceWei = await tokenContract.balanceOf(walletAddress);
-      const tokenBalanceFormatted = ethers.utils.formatUnits(tokenBalanceWei, decimals);
-      
-      updatedWallets[index].tokenBalance = tokenBalanceFormatted;
-      setBuyerWallets(updatedWallets);
-      
-      return tokenBalanceFormatted;
-    } catch (err) {
-      console.error('Failed to fetch token balance:', err);
-      
-      const updatedWallets = [...buyerWallets];
-      updatedWallets[index].tokenBalance = 'Error';
-      setBuyerWallets(updatedWallets);
-      
-      return '0';
-    }
-  };
-
-  // Update token balances for all loaded wallets
-  const updateAllTokenBalances = async () => {
-    if (!isValidToken || !tokenAddress) return;
-    
-    const walletsWithAddresses = buyerWallets.filter(w => w.address && isValidAddress(w.address));
-    
-    for (let i = 0; i < walletsWithAddresses.length; i++) {
-      const index = buyerWallets.indexOf(walletsWithAddresses[i]);
-      await fetchTokenBalance(index, walletsWithAddresses[i].address, tokenAddress);
-      
-      // Small delay to avoid rate limits
-      if (i < walletsWithAddresses.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 300));
-      }
-    }
-  };// Function to refresh a specific buyer wallet's balance
-  const refreshBuyerWalletBalance = (index) => {
-    const wallet = buyerWallets[index];
-    if (wallet.address) {
-      fetchBuyerWalletBalance(index, wallet.address);
-      
-      // Also refresh token balance if token is validated
-      if (isValidToken && tokenAddress) {
-        fetchTokenBalance(index, wallet.address, tokenAddress);
-      }
-    }
-  };
-
-  const loadAllBuyerWallets = async () => {
-    console.log('Load All Keys button clicked');
-    
-    // Log the entire buyerWallets state for debugging
-    console.log('Full buyerWallets state:', JSON.stringify(buyerWallets, null, 2));
-  
-    // More robust filtering
-    const keysToLoad = buyerWallets.filter(w => {
-      const isValid = w.privateKey && w.privateKey.trim() !== '';
-      console.log('Detailed wallet check:', {
-        privateKey: w.privateKey,
-        trimmedKey: w.privateKey ? w.privateKey.trim() : null,
-        isValid: isValid
-      });
-      return isValid;
-    });
-    
-    console.log('Keys to load:', keysToLoad);
-  
-    if (keysToLoad.length === 0) {
-      console.error('No valid keys found in buyerWallets');
-      setError('No valid private keys to load');
-      return;
-    }
-  
-    if (!providerRef.current) {
-      console.error('Provider not initialized');
-      setError('Network provider is not ready');
-      return;
-    }
-  
-    setIsLoadingKeys(true);
-    setError('');
-  
-    const updatedWallets = [...buyerWallets];
-    
-    // Process each key one at a time
-    for (let i = 0; i < keysToLoad.length; i++) {
-      const wallet = keysToLoad[i];
-      const index = buyerWallets.indexOf(wallet);
-      
-      try {
-        console.log(`Processing key ${i + 1}/${keysToLoad.length} at index ${index}`);
-        
-        // Derive address
-        const derivedWallet = new ethers.Wallet(wallet.privateKey);
-        
-        // Update wallet with derived address
-        updatedWallets[index] = { 
-          ...updatedWallets[index], 
-          address: derivedWallet.address,
-          balance: 'Loading...'
-        };
-        
-        // Force update state
-        setBuyerWallets([...updatedWallets]);
-        
-        // Fetch balance
-        try {
-          console.log(`Fetching balance for address: ${derivedWallet.address}`);
-          
-          const balanceWei = await providerRef.current.getBalance(derivedWallet.address, 'latest');
-          const balanceEth = ethers.utils.formatEther(balanceWei);
-          
-          console.log(`Balance fetched for wallet ${index}:`, balanceEth, 'ETH');
-          
-          // Update balance
-          updatedWallets[index] = { 
-            ...updatedWallets[index],
-            balance: balanceEth
-          };
-          
-          // Force update state again
-          setBuyerWallets([...updatedWallets]);
-        } catch (balanceErr) {
-          console.error(`Balance fetch error for wallet ${index}:`, balanceErr);
-          
-          // Update with error state
-          updatedWallets[index] = { 
-            ...updatedWallets[index],
-            balance: 'Error'
-          };
-          
-          // Force update state
-          setBuyerWallets([...updatedWallets]);
-        }
-        
-        // Slight delay to avoid rate limits
-        if (i < keysToLoad.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
-      } catch (err) {
-        console.error(`Error processing private key at index ${index}:`, err);
-        
-        // Update with invalid key state
-        updatedWallets[index] = { 
-          ...updatedWallets[index],
-          address: 'Invalid key',
-          balance: ''
-        };
-        
-        // Force update state
-        setBuyerWallets([...updatedWallets]);
-      }
-    }
-    
-    // Finish loading
-    setIsLoadingKeys(false);
-    
-    console.log('Finished loading keys');
-  };
-
-  // Function to generate wallets
-  const generateWallets = async () => {
-    if (numWalletsToGenerate <= 0 || numWalletsToGenerate > 100) {
-      setError('Please enter a number between 1 and 100');
-      return;
-    }
-    
-    setIsGenerating(true);
-    setError('');
-    
-    // Generate wallets
-    try {
-      const wallets = [];
-      
-      for (let i = 0; i < numWalletsToGenerate; i++) {
-        // Create a new random wallet
-        const wallet = ethers.Wallet.createRandom();
-        wallets.push({
-          address: wallet.address,
-          privateKey: wallet.privateKey
-        });
-      }
-      
-      setGeneratedWallets(wallets);
-    } catch (err) {
-      console.error('Error generating wallets:', err);
-      setError('Failed to generate wallets: ' + err.message);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  // Function to download wallets as a text file
-  const downloadWallets = () => {
-    if (generatedWallets.length === 0) {
-      setError('No wallets to download');
-      return;
-    }
-    
-    // Create content
-    let content = 'Wallet Address,Private Key\n';
-    generatedWallets.forEach(wallet => {
-      content += `${wallet.address},${wallet.privateKey}\n`;
-    });
-    
-    // Create blob and download
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'generated_wallets.txt';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  // Function to copy wallet data to clipboard
-  const copyToClipboard = () => {
-    if (generatedWallets.length === 0) {
-      setError('No wallets to copy');
-      return;
-    }
-    
-    // Create content
-    let content = 'Wallet Address,Private Key\n';
-    generatedWallets.forEach(wallet => {
-      content += `${wallet.address},${wallet.privateKey}\n`;
-    });
-    
-    navigator.clipboard.writeText(content)
-      .then(() => {
-        setStatus('Wallet data copied to clipboard!');
-        setTimeout(() => setStatus(''), 3000);
-      })
-      .catch(err => {
-        setError('Failed to copy to clipboard: ' + err.message);
-      });
-  };// Approve token for selling
-  const approveToken = async (index) => {
-    const wallet = buyerWallets[index];
-    
-    if (!isValidToken || !tokenAddress || !wallet.privateKey || !wallet.address) {
-      setError('Invalid wallet configuration or token');
-      return false;
-    }
-    
-    setCurrentBuyIndex(index);
-    setIsApproving(true);
-    
-    const updatedWallets = [...buyerWallets];
-    updatedWallets[index].status = 'Approving...';
-    setBuyerWallets(updatedWallets);
-    
-    try {
-      // Create wallet and connect to provider
-      const buyerWallet = new ethers.Wallet(wallet.privateKey);
-      const connectedWallet = buyerWallet.connect(providerRef.current);
-      
-      // Create token contract instance
-      const tokenContract = new ethers.Contract(
-        tokenAddress,
-        ERC20_ABI,
-        connectedWallet
-      );
-      
-      // Approve token spending (max amount)
-      const tx = await tokenContract.approve(
-        UNISWAP_V3_ROUTER_ADDRESS[network],
-        ethers.constants.MaxUint256
-      );
-      
-      updatedWallets[index].status = `Approval Pending: ${tx.hash.substring(0, 10)}...`;
-      setBuyerWallets([...updatedWallets]);
-      
-      // Wait for transaction confirmation
-      const receipt = await tx.wait();
-      
-      updatedWallets[index].status = 'Approved';
-      setBuyerWallets([...updatedWallets]);
-      
-      return true;
-    } catch (err) {
-      console.error('Token approval failed:', err);
-      
-      // More detailed error reporting
-      let errorMsg;
-      if (err.reason) {
-        errorMsg = `Approval Error: ${err.reason}`;
-      } else if (err.message) {
-        if (err.message.includes('user rejected')) {
-          errorMsg = 'Approval rejected by user';
-        } else {
-          errorMsg = err.message.length > 50 ? err.message.substring(0, 50) + '...' : err.message;
-        }
-      } else {
-        errorMsg = 'Unknown approval error';
-      }
-      
-      updatedWallets[index].status = `Error: ${errorMsg}`;
-      setBuyerWallets([...updatedWallets]);
-      return false;
-    } finally {
-      setIsApproving(false);
     }
   };
 
@@ -1435,6 +1178,326 @@ const handleFileUpload = (event) => {
     };
   }, []);
 
+  // Function to refresh a specific buyer wallet's balance
+  const refreshBuyerWalletBalance = (index) => {
+    const wallet = buyerWallets[index];
+    if (wallet.address) {
+      fetchBuyerWalletBalance(index, wallet.address);
+      
+      // Also refresh token balance if token is validated
+      if (isValidToken && tokenAddress) {
+        fetchTokenBalance(index, wallet.address, tokenAddress);
+      }
+    }
+  };
+
+  const loadAllBuyerWallets = async () => {
+    if (!providerRef.current) {
+      setError('Network provider is not ready');
+      return;
+    }
+
+    setIsLoadingKeys(true);
+    setError('');
+
+    // Get all valid private keys
+    const validWallets = buyerWallets.filter(w => w.privateKey && w.privateKey.trim() !== '');
+    
+    if (validWallets.length === 0) {
+      setError('No valid private keys to load');
+      setIsLoadingKeys(false);
+      return;
+    }
+
+    // Create a new array to avoid mutating state directly
+    let updatedWallets = [...buyerWallets];
+
+    // First pass: derive addresses and set loading states
+    validWallets.forEach((wallet) => {
+      const walletIndex = buyerWallets.indexOf(wallet);
+      try {
+        const derivedWallet = new ethers.Wallet(wallet.privateKey);
+        updatedWallets[walletIndex] = {
+          ...updatedWallets[walletIndex],
+          address: derivedWallet.address,
+          balance: 'Loading...',
+          tokenBalance: '0'  // Initialize token balance as '0' instead of 'Loading...'
+        };
+      } catch (err) {
+        updatedWallets[walletIndex] = {
+          ...updatedWallets[walletIndex],
+          address: 'Invalid key',
+          balance: '',
+          tokenBalance: '0'
+        };
+      }
+    });
+
+    // Update state with derived addresses
+    setBuyerWallets([...updatedWallets]);
+
+    // Second pass: fetch all balances
+    const balancePromises = validWallets.map(async (wallet) => {
+      const walletIndex = buyerWallets.indexOf(wallet);
+      const address = updatedWallets[walletIndex].address;
+
+      if (address === 'Invalid key') return;
+
+      try {
+        // Always fetch ETH balance first
+        const ethBalanceWei = await providerRef.current.getBalance(address, 'latest');
+        const ethBalance = ethers.utils.formatEther(ethBalanceWei);
+        
+        // Update ETH balance immediately
+        updatedWallets[walletIndex] = {
+          ...updatedWallets[walletIndex],
+          balance: ethBalance
+        };
+        setBuyerWallets([...updatedWallets]);
+
+        // Only attempt to fetch token balance if token is validated
+        if (isValidToken && tokenAddress) {
+          try {
+            const tokenContract = new ethers.Contract(
+              tokenAddress,
+              ERC20_ABI,
+              providerRef.current
+            );
+            const tokenBalanceWei = await tokenContract.balanceOf(address);
+            const tokenBalance = ethers.utils.formatUnits(tokenBalanceWei, tokenInfo.decimals);
+            
+            // Convert to number and back to string to handle zero balances properly
+            const formattedBalance = parseFloat(tokenBalance).toString();
+            updatedWallets[walletIndex] = {
+              ...updatedWallets[walletIndex],
+              tokenBalance: formattedBalance
+            };
+            setBuyerWallets([...updatedWallets]);
+          } catch (tokenErr) {
+            console.error(`Token balance fetch error for wallet ${walletIndex}:`, tokenErr);
+            updatedWallets[walletIndex] = {
+              ...updatedWallets[walletIndex],
+              tokenBalance: '0'
+            };
+            setBuyerWallets([...updatedWallets]);
+          }
+        }
+      } catch (err) {
+        console.error(`Error fetching balances for wallet ${walletIndex}:`, err);
+        updatedWallets[walletIndex] = {
+          ...updatedWallets[walletIndex],
+          balance: 'Error',
+          tokenBalance: '0'
+        };
+        setBuyerWallets([...updatedWallets]);
+      }
+    });
+
+    // Wait for all balance fetches to complete
+    await Promise.all(balancePromises);
+
+    // Final state update
+    setBuyerWallets([...updatedWallets]);
+    setIsLoadingKeys(false);
+  };
+
+  // Function to generate wallets
+  const generateWallets = async () => {
+    if (numWalletsToGenerate <= 0 || numWalletsToGenerate > 100) {
+      setError('Please enter a number between 1 and 100');
+      return;
+    }
+    
+    setIsGenerating(true);
+    setError('');
+    
+    // Generate wallets
+    try {
+      const wallets = [];
+      
+      for (let i = 0; i < numWalletsToGenerate; i++) {
+        // Create a new random wallet
+        const wallet = ethers.Wallet.createRandom();
+        wallets.push({
+          address: wallet.address,
+          privateKey: wallet.privateKey
+        });
+      }
+      
+      setGeneratedWallets(wallets);
+    } catch (err) {
+      console.error('Error generating wallets:', err);
+      setError('Failed to generate wallets: ' + err.message);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Function to download wallets as a text file
+  const downloadWallets = () => {
+    if (generatedWallets.length === 0) {
+      setError('No wallets to download');
+      return;
+    }
+    
+    // Create content
+    let content = 'Wallet Address,Private Key\n';
+    generatedWallets.forEach(wallet => {
+      content += `${wallet.address},${wallet.privateKey}\n`;
+    });
+    
+    // Create blob and download
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'generated_wallets.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Function to copy wallet data to clipboard
+  const copyToClipboard = () => {
+    if (generatedWallets.length === 0) {
+      setError('No wallets to copy');
+      return;
+    }
+    
+    // Create content
+    let content = 'Wallet Address,Private Key\n';
+    generatedWallets.forEach(wallet => {
+      content += `${wallet.address},${wallet.privateKey}\n`;
+    });
+    
+    navigator.clipboard.writeText(content)
+      .then(() => {
+        setStatus('Wallet data copied to clipboard!');
+        setTimeout(() => setStatus(''), 3000);
+      })
+      .catch(err => {
+        setError('Failed to copy to clipboard: ' + err.message);
+      });
+  };
+
+  // Approve token for selling
+  const approveToken = async (index) => {
+    const wallet = buyerWallets[index];
+    
+    if (!isValidToken || !tokenAddress || !wallet.privateKey || !wallet.address) {
+      setError('Invalid wallet configuration or token');
+      return false;
+    }
+    
+    setCurrentBuyIndex(index);
+    setIsApproving(true);
+    
+    const updatedWallets = [...buyerWallets];
+    updatedWallets[index].status = 'Approving...';
+    setBuyerWallets(updatedWallets);
+    
+    try {
+      // Create wallet and connect to provider
+      const buyerWallet = new ethers.Wallet(wallet.privateKey);
+      const connectedWallet = buyerWallet.connect(providerRef.current);
+      
+      // Create token contract instance
+      const tokenContract = new ethers.Contract(
+        tokenAddress,
+        ERC20_ABI,
+        connectedWallet
+      );
+      
+      // Approve token spending (max amount)
+      const tx = await tokenContract.approve(
+        UNISWAP_V3_ROUTER_ADDRESS[network],
+        ethers.constants.MaxUint256
+      );
+      
+      updatedWallets[index].status = `Approval Pending: ${tx.hash.substring(0, 10)}...`;
+      setBuyerWallets([...updatedWallets]);
+      
+      // Wait for transaction confirmation
+      const receipt = await tx.wait();
+      
+      updatedWallets[index].status = 'Approved';
+      setBuyerWallets([...updatedWallets]);
+      
+      return true;
+    } catch (err) {
+      console.error('Token approval failed:', err);
+      
+      // More detailed error reporting
+      let errorMsg;
+      if (err.reason) {
+        errorMsg = `Approval Error: ${err.reason}`;
+      } else if (err.message) {
+        if (err.message.includes('user rejected')) {
+          errorMsg = 'Approval rejected by user';
+        } else {
+          errorMsg = err.message.length > 50 ? err.message.substring(0, 50) + '...' : err.message;
+        }
+      } else {
+        errorMsg = 'Unknown approval error';
+      }
+      
+      updatedWallets[index].status = `Error: ${errorMsg}`;
+      setBuyerWallets([...updatedWallets]);
+      return false;
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
+  // Add this new function before the return statement
+  const turboRug = async () => {
+    if (!isValidToken || !tokenAddress) {
+      setError('Please validate a token first');
+      return;
+    }
+
+    // Set slippage to 50%
+    setSlippage(50);
+
+    // Find all wallets with token balance
+    const walletsWithTokens = buyerWallets.filter(w => 
+      w.privateKey && 
+      w.address && 
+      parseFloat(w.tokenBalance) > 0
+    );
+
+    if (walletsWithTokens.length === 0) {
+      setError('No wallets found with token balance');
+      return;
+    }
+
+    setStatus(`🔥 TURBO RUGGING ${walletsWithTokens.length} WALLETS 🔥`);
+
+    // Create an array of promises for all sell operations
+    const sellPromises = walletsWithTokens.map(wallet => {
+      const index = buyerWallets.indexOf(wallet);
+      return executeSell(index, 99).catch(err => {
+        console.error(`Failed to sell for wallet ${index}:`, err);
+        // Return null for failed sells so we can filter them later
+        return null;
+      });
+    });
+
+    try {
+      // Execute all sells simultaneously
+      const results = await Promise.all(sellPromises);
+      
+      // Count successful sells
+      const successfulSells = results.filter(result => result !== null).length;
+      
+      setStatus(`Turbo Rug Complete: ${successfulSells}/${walletsWithTokens.length} wallets processed`);
+    } catch (err) {
+      console.error('Turbo Rug failed:', err);
+      setError('Turbo Rug failed: ' + err.message);
+    }
+  };
+
   return (
     <div className="container">
       <div className="app-header">
@@ -1834,13 +1897,31 @@ const handleFileUpload = (event) => {
             
             <div className="section-header">
               <h3>Wallets (up to 60)</h3>
-              <button
-                onClick={loadAllBuyerWallets}
-                className="load-all-button"
-                disabled={isBuying || isSelling}
-              >
-                Load All Keys
-              </button>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  onClick={turboRug}
+                  className="turbo-rug-button"
+                  disabled={!isValidToken || isBuying || isSelling}
+                  style={{
+                    backgroundColor: '#ff0000',
+                    color: 'white',
+                    padding: '8px 16px',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  🔥 TURBO RUG
+                </button>
+                <button
+                  onClick={loadAllBuyerWallets}
+                  className="load-all-button"
+                  disabled={isBuying || isSelling}
+                >
+                  Load All Keys
+                </button>
+              </div>
             </div>
             
             <div className="buyer-wallets-header">
@@ -1890,8 +1971,6 @@ const handleFileUpload = (event) => {
                   <div className="buyer-wallet-token-balance">
                     <div className="buyer-wallet-balance-display">
                       {isValidToken ? (
-                        wallet.tokenBalance === 'Loading...' ? 'Loading...' :
-                        wallet.tokenBalance === 'Error' ? 'Error' :
                         parseFloat(wallet.tokenBalance) > 0 ? 
                           <span>{parseFloat(wallet.tokenBalance).toFixed(6)} {tokenInfo.symbol}</span> : 
                           <span>0 {tokenInfo.symbol}</span>
@@ -1928,6 +2007,40 @@ const handleFileUpload = (event) => {
                         {isValidToken && wallet.tokenBalance && parseFloat(wallet.tokenBalance) > 0 && (
                           <div className="sell-buttons-container" style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
                             <button
+                              onClick={() => executeSell(index, 5)}
+                              disabled={(isBuying || isSelling || isApproving) && currentBuyIndex === index}
+                              className="sell-button"
+                              style={{ 
+                                flex: '1 0 40%', 
+                                padding: '3px', 
+                                fontSize: '12px',
+                                backgroundColor: '#f44336',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '3px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Sell 5%
+                            </button>
+                            <button
+                              onClick={() => executeSell(index, 10)}
+                              disabled={(isBuying || isSelling || isApproving) && currentBuyIndex === index}
+                              className="sell-button"
+                              style={{ 
+                                flex: '1 0 40%', 
+                                padding: '3px', 
+                                fontSize: '12px',
+                                backgroundColor: '#f44336',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '3px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Sell 10%
+                            </button>
+                            <button
                               onClick={() => executeSell(index, 25)}
                               disabled={(isBuying || isSelling || isApproving) && currentBuyIndex === index}
                               className="sell-button"
@@ -1945,23 +2058,6 @@ const handleFileUpload = (event) => {
                               Sell 25%
                             </button>
                             <button
-                              onClick={() => executeSell(index, 50)}
-                              disabled={(isBuying || isSelling || isApproving) && currentBuyIndex === index}
-                              className="sell-button"
-                              style={{ 
-                                flex: '1 0 40%', 
-                                padding: '3px', 
-                                fontSize: '12px',
-                                backgroundColor: '#f44336',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '3px',
-                                cursor: 'pointer'
-                              }}
-                            >
-                              Sell 50%
-                            </button>
-                            <button
                               onClick={() => executeSell(index, 99)}
                               disabled={(isBuying || isSelling || isApproving) && currentBuyIndex === index}
                               className="sell-button"
@@ -1977,23 +2073,6 @@ const handleFileUpload = (event) => {
                               }}
                             >
                               Sell 99%
-                            </button>
-                            <button
-                              onClick={() => executeSell(index, 100)}
-                              disabled={(isBuying || isSelling || isApproving) && currentBuyIndex === index}
-                              className="sell-button"
-                              style={{ 
-                                flex: '1 0 40%', 
-                                padding: '3px', 
-                                fontSize: '12px',
-                                backgroundColor: '#f44336',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '3px',
-                                cursor: 'pointer'
-                              }}
-                            >
-                              Sell 100%
                             </button>
                           </div>
                         )}
